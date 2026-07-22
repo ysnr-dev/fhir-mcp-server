@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+test
+*.log
+.git
+.gitignore
+.DS_Store
+Dockerfile
+compose.yaml
+README.md
+PLAN.md

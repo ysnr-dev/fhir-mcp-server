@@ -1,0 +1,21 @@
+services:
+  # MCP stdio サーバー。クライアント(Claude 等)からは
+  #   docker compose run --rm -T fhir-mcp
+  # として起動する(常駐サービスではないので `up` は不要)。
+  #
+  # 既定の接続先はホスト側の http://localhost:3000。
+  # fhir-server を docker compose で動かしている場合も、web サービスが
+  # 3000 番をホストに公開しているのでこのままつながる。
+  fhir-mcp:
+    build: .
+    image: fhir-mcp-server
+    stdin_open: true
+    environment:
+      FHIR_BASE_URL: ${FHIR_BASE_URL:-http://host.docker.internal:3000}
+      FHIR_CLIENT_ID: ${FHIR_CLIENT_ID:-}
+      FHIR_CLIENT_SECRET: ${FHIR_CLIENT_SECRET:-}
+      FHIR_MCP_ALLOW_WRITES: ${FHIR_MCP_ALLOW_WRITES:-false}
+      FHIR_MCP_MAX_COUNT: ${FHIR_MCP_MAX_COUNT:-50}
+    extra_hosts:
+      # Linux でも host.docker.internal を使えるようにする(Mac/Windows では無視される)
+      - "host.docker.internal:host-gateway"
