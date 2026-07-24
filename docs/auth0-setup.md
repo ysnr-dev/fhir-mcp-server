@@ -38,11 +38,13 @@ Auth0 ダッシュボード → **Applications → APIs → Create API**
 | 項目 | 値 |
 |---|---|
 | Name | `fhir-mcp-server` |
-| Identifier | `https://YOUR-SERVICE.onrender.com/api` (これが `OAUTH_AUDIENCE`) |
+| Identifier | `https://fhir-mcp-server/api` (これが `OAUTH_AUDIENCE`) |
 | Signing Algorithm | **RS256** |
 
-> Identifier は URL 形式の任意の識別子。実在エンドポイントである必要はないが、
-> 混乱を避けるため公開 URL + `/api` を推奨。
+> Identifier は URL 形式の任意の識別子で、実在エンドポイントである必要はない。
+> **作成後に変更できず、トークンの `aud` になる**ため、ホスティング先(Render 等)の
+> URL には紐づけず、上記のような安定した論理 URI を使う。`.env` の `OAUTH_AUDIENCE`
+> とこの値を**完全一致**(末尾スラッシュ含む)させること。
 
 ### 2. Default Audience を設定(落とし穴1の対処)
 

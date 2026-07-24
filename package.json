@@ -18,6 +18,7 @@
     "dev": "tsx src/index.ts",
     "dev:http": "tsx src/http.ts",
     "start:http": "node dist/http.js",
+    "verify:oauth": "bash scripts/verify-oauth.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check src test",
