@@ -126,13 +126,27 @@ docker compose で常駐起動する場合(`.env` に上記を書いておく):
 docker compose up fhir-mcp-http    # http://localhost:8080/mcp で待受
 ```
 
-### 外部 IdP(例: Auth0)の設定
+環境変数はローカルでは `.env`(サンプル: [.env.example](./.env.example))にまとめ、
+Node 20+ の `--env-file` で読み込めます:
 
-1. API を1つ作成し、その Identifier を `OAUTH_AUDIENCE` に設定。
-2. Dynamic Client Registration を有効化(Claude アプリがクライアント登録を行う)。
-   有効化した場合は `OAUTH_REGISTRATION_URL`(例 `https://YOUR_TENANT.auth0.com/oidc/register`)も設定。
-3. `OAUTH_ISSUER_URL`/`OAUTH_AUTHORIZATION_URL`/`OAUTH_TOKEN_URL`/`OAUTH_JWKS_URL` を
-   テナントの値に合わせる。IdP は Google / Cognito 等にも差し替え可能。
+```bash
+npm run build && node --env-file=.env dist/http.js
+```
+
+### 外部 IdP(Auth0)の設定
+
+詳細手順は **[docs/auth0-setup.md](./docs/auth0-setup.md)** を参照。要点:
+
+1. API を作成し Identifier を `OAUTH_AUDIENCE` に設定。
+2. **テナントの Default Audience をその Identifier に設定**(これをしないと Auth0 が
+   JWT ではなく opaque トークンを発行し検証に失敗する — MCP × Auth0 の典型的な落とし穴)。
+3. **Dynamic Client Registration を有効化**し、ログイン接続を domain level に昇格
+   (Claude アプリがクライアント自己登録するため)。`OAUTH_REGISTRATION_URL` も設定。
+4. `.well-known/openid-configuration` の値を `OAUTH_ISSUER_URL` 等に写す。
+   IdP は Google / Cognito 等にも差し替え可能。
+
+スマホの前に、M2M トークンで `/mcp` の Bearer 検証が通ることを確認できます
+(手順は上記ドキュメント参照)。
 
 ### Cloud Run へのデプロイ(想定)
 

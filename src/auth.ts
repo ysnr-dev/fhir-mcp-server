@@ -1,7 +1,42 @@
+import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import { ProxyOAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/providers/proxyProvider.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { OAuthConfig } from "./config.js";
+
+/**
+ * ProxyOAuthServerProvider whose client store remembers clients registered via
+ * Dynamic Client Registration.
+ *
+ * The base proxy provider forwards `/register` to the IdP but keeps no record of
+ * the result, so on the subsequent `/authorize` the router's `getClient` lookup
+ * has no `redirect_uris` to validate against and rejects the request. We cache
+ * each DCR result in memory (registration → authorize happens within seconds of
+ * a single connect), and fall back to "unknown client" for cache misses.
+ *
+ * Note (demo constraint): the cache is per-instance and lost on restart. On a
+ * Render Free instance that has slept, a client re-authorizing with a cached
+ * client_id may need to re-register. Access-token verification is stateless
+ * (JWKS) and unaffected.
+ */
+class CachingProxyOAuthProvider extends ProxyOAuthServerProvider {
+  private readonly clients = new Map<string, OAuthClientInformationFull>();
+
+  get clientsStore(): OAuthRegisteredClientsStore {
+    const baseRegister = super.clientsStore.registerClient;
+    return {
+      getClient: async (clientId) => this.clients.get(clientId),
+      registerClient: baseRegister
+        ? async (client) => {
+            const registered = await baseRegister(client);
+            this.clients.set(registered.client_id, registered);
+            return registered;
+          }
+        : undefined,
+    };
+  }
+}
 
 /**
  * Builds an OAuth provider that delegates the authorization/token flow to an
@@ -13,21 +48,15 @@ import type { OAuthConfig } from "./config.js";
  * to use the fixed SMART Backend Services credentials.
  */
 export function buildOAuthProvider(oauth: OAuthConfig): ProxyOAuthServerProvider {
-  const verifyAccessToken = createTokenVerifier(oauth);
-
-  return new ProxyOAuthServerProvider({
+  return new CachingProxyOAuthProvider({
     endpoints: {
       authorizationUrl: oauth.authorizationUrl,
       tokenUrl: oauth.tokenUrl,
       registrationUrl: oauth.registrationUrl,
     },
-    verifyAccessToken,
-    // The IdP is the source of truth for registered clients; with Dynamic
-    // Client Registration enabled, the Claude app registers itself upstream.
-    getClient: async (clientId) => ({
-      client_id: clientId,
-      redirect_uris: [],
-    }),
+    verifyAccessToken: createTokenVerifier(oauth),
+    // Unknown until registered; the cached store above supplies real clients.
+    getClient: async () => undefined,
   });
 }
 
