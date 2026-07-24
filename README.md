@@ -145,6 +145,25 @@ gcloud run deploy fhir-mcp-server \
 `PORT` は Cloud Run が注入します(`HTTP_PORT` 未設定時のフォールバックとして利用)。
 scale-to-zero でデモのコストを最小化できます。
 
+### Render へのデプロイ(Blueprint / Docker)
+
+`render.yaml`(Blueprint)を同梱しています。既存 Dockerfile を使い、起動コマンドを
+http 版に上書きする構成です。
+
+1. リポジトリを Render に接続し、**Blueprint** から `render.yaml` を読み込む。
+2. `sync: false` の環境変数(`OAUTH_*` / `FHIR_*` / `PUBLIC_URL`)を Render ダッシュボードで設定。
+3. 初回デプロイで `https://<service>.onrender.com` が発行されるので、それを `PUBLIC_URL`
+   (メタデータ用)に設定して再デプロイ。IdP 側の Allowed Callback にもこの URL を登録。
+4. スマホ Claude アプリのカスタムコネクタに `https://<service>.onrender.com/mcp` を登録。
+
+注意点(Free プラン):
+
+- **15分無アクセスでスリープ**し、次アクセスでコールドスタート(数十秒)。初回接続が
+  遅延/タイムアウトすることがある。安定させたい場合は `render.yaml` の `plan` を
+  `starter` に変更(常時起動)。
+- セッションはメモリ保持のため、インスタンス再起動で切断される(低トラフィックのデモは問題なし)。
+- `PORT` は Render が注入(`HTTP_PORT` 未設定時のフォールバックで対応済み)。
+
 ### スマホ Claude アプリへの登録
 
 Claude アプリの「カスタムコネクタ」に `PUBLIC_URL`(= `https://SERVICE_URL/mcp`)を登録し、

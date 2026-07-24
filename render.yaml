@@ -1,0 +1,51 @@
+# Render Blueprint — Web版(リモート HTTP MCP)を常駐 Web Service としてデプロイする。
+#
+# 使い方:
+#   1. このリポジトリを Render に接続し「Blueprint」から本ファイルを読み込む。
+#   2. sync: false の環境変数(OAUTH_* / FHIR_*)を Render ダッシュボードで設定する。
+#   3. デプロイ後、発行された https://<service>.onrender.com を PUBLIC_URL に設定して再デプロイ。
+#      (初回は仮の PUBLIC_URL でデプロイ→URL 確定後に更新、の2段になる)
+#
+# 注: Free プランは15分無アクセスでスリープし、次アクセスでコールドスタート(数十秒)。
+#     デモ用途のため許容。安定運用が必要なら plan を starter に変更する。
+services:
+  - type: web
+    name: fhir-mcp-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    # 既存 Dockerfile の CMD(stdio)を http 版に上書き。
+    dockerCommand: node dist/http.js
+    healthCheckPath: /healthz
+    envVars:
+      # Render は PORT を注入する。loadHttpConfig が HTTP_PORT の未設定時に拾う。
+      - key: PORT
+        value: 8080
+      # このサービスの公開 URL。初回は onrender.com のデフォルト URL に手動で合わせる。
+      # (Render の外部 URL を自動で環境変数に入れる仕組みはないため sync: false)
+      - key: PUBLIC_URL
+        sync: false
+      # --- FHIR 接続(固定 SMART Backend Services クレデンシャル) ---
+      - key: FHIR_BASE_URL
+        sync: false
+      - key: FHIR_CLIENT_ID
+        sync: false
+      - key: FHIR_CLIENT_SECRET
+        sync: false
+      - key: FHIR_MCP_ALLOW_WRITES
+        value: "false"
+      - key: FHIR_MCP_MAX_COUNT
+        value: "50"
+      # --- OAuth(外部 IdP へ委譲) ---
+      - key: OAUTH_ISSUER_URL
+        sync: false
+      - key: OAUTH_AUTHORIZATION_URL
+        sync: false
+      - key: OAUTH_TOKEN_URL
+        sync: false
+      - key: OAUTH_JWKS_URL
+        sync: false
+      - key: OAUTH_AUDIENCE
+        sync: false
+      - key: OAUTH_REGISTRATION_URL
+        sync: false
