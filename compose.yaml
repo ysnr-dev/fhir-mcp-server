@@ -19,3 +19,29 @@ services:
     extra_hosts:
       # Linux でも host.docker.internal を使えるようにする(Mac/Windows では無視される)
       - "host.docker.internal:host-gateway"
+
+  # Web版(リモート HTTP MCP)。スマホ Claude アプリのカスタムコネクタ検証用。
+  #   docker compose up fhir-mcp-http
+  # として常駐起動する(stdio 版と違い常駐が必要)。OAuth の各 URL は外部 IdP のもの。
+  fhir-mcp-http:
+    build: .
+    image: fhir-mcp-server
+    command: ["node", "dist/http.js"]
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    environment:
+      HTTP_PORT: 8080
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      FHIR_BASE_URL: ${FHIR_BASE_URL:-http://host.docker.internal:3000}
+      FHIR_CLIENT_ID: ${FHIR_CLIENT_ID:-}
+      FHIR_CLIENT_SECRET: ${FHIR_CLIENT_SECRET:-}
+      FHIR_MCP_ALLOW_WRITES: ${FHIR_MCP_ALLOW_WRITES:-false}
+      FHIR_MCP_MAX_COUNT: ${FHIR_MCP_MAX_COUNT:-50}
+      OAUTH_ISSUER_URL: ${OAUTH_ISSUER_URL:-}
+      OAUTH_AUTHORIZATION_URL: ${OAUTH_AUTHORIZATION_URL:-}
+      OAUTH_TOKEN_URL: ${OAUTH_TOKEN_URL:-}
+      OAUTH_REGISTRATION_URL: ${OAUTH_REGISTRATION_URL:-}
+      OAUTH_JWKS_URL: ${OAUTH_JWKS_URL:-}
+      OAUTH_AUDIENCE: ${OAUTH_AUDIENCE:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

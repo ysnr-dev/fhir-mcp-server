@@ -20,5 +20,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 
 USER node
-# MCP stdio server: communicates over stdin/stdout, diagnostics on stderr.
+
+# Two entrypoints share this image:
+#   - stdio (default): `node dist/index.js` — Claude Desktop/Code 向け。
+#   - HTTP  (Web版):   `node dist/http.js`  — スマホ/リモート MCP。Cloud Run 等では
+#     この command で起動する(PORT は Cloud Run が注入)。
+EXPOSE 8080
 CMD ["node", "dist/index.js"]

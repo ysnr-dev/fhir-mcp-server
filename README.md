@@ -91,6 +91,65 @@ claude mcp add fhir \
 }
 ```
 
+## Web版(リモート HTTP MCP / スマホ Claude アプリ向け)
+
+Claude Desktop / Code は stdio でローカル起動しますが、**スマホの Claude アプリ**は
+ローカルプロセスを起動できず、**公開 HTTPS に常駐するリモート MCP サーバー
+(カスタムコネクタ)＋ OAuth** にしか接続できません。そのための HTTP エントリポイント
+`dist/http.js` を用意しています(stdio 版 `dist/index.js` はそのまま併存)。
+
+- トランスポート: MCP Streamable HTTP(`/mcp` に POST/GET/DELETE)
+- 認可: 外部 IdP(Auth0 等)へ委譲する OAuth。`/.well-known/oauth-*` メタデータと
+  authorize/token/register の proxy を自動提供し、`/mcp` は Bearer トークンで保護
+- **このフェーズでは OAuth は「接続の入口」を守るだけ**。認証ユーザー単位の FHIR
+  アクセス制御(SMART on FHIR `user/*`/`patient/*` 相当)は本番データ移行時に対応予定。
+  FHIR への接続は従来通り固定の SMART Backend Services クレデンシャルを使います
+  (デモ・評価データ前提)。
+
+### 起動
+
+```bash
+npm run build
+PUBLIC_URL=https://your-host \
+OAUTH_ISSUER_URL=https://YOUR_TENANT.auth0.com/ \
+OAUTH_AUTHORIZATION_URL=https://YOUR_TENANT.auth0.com/authorize \
+OAUTH_TOKEN_URL=https://YOUR_TENANT.auth0.com/oauth/token \
+OAUTH_JWKS_URL=https://YOUR_TENANT.auth0.com/.well-known/jwks.json \
+OAUTH_AUDIENCE=https://your-host/api \
+FHIR_BASE_URL=http://localhost:3000 \
+node dist/http.js
+```
+
+docker compose で常駐起動する場合(`.env` に上記を書いておく):
+
+```bash
+docker compose up fhir-mcp-http    # http://localhost:8080/mcp で待受
+```
+
+### 外部 IdP(例: Auth0)の設定
+
+1. API を1つ作成し、その Identifier を `OAUTH_AUDIENCE` に設定。
+2. Dynamic Client Registration を有効化(Claude アプリがクライアント登録を行う)。
+   有効化した場合は `OAUTH_REGISTRATION_URL`(例 `https://YOUR_TENANT.auth0.com/oidc/register`)も設定。
+3. `OAUTH_ISSUER_URL`/`OAUTH_AUTHORIZATION_URL`/`OAUTH_TOKEN_URL`/`OAUTH_JWKS_URL` を
+   テナントの値に合わせる。IdP は Google / Cognito 等にも差し替え可能。
+
+### Cloud Run へのデプロイ(想定)
+
+```bash
+gcloud run deploy fhir-mcp-server \
+  --source . --command node,dist/http.js \
+  --set-env-vars PUBLIC_URL=https://SERVICE_URL,OAUTH_ISSUER_URL=...,OAUTH_AUDIENCE=...,FHIR_BASE_URL=...
+```
+
+`PORT` は Cloud Run が注入します(`HTTP_PORT` 未設定時のフォールバックとして利用)。
+scale-to-zero でデモのコストを最小化できます。
+
+### スマホ Claude アプリへの登録
+
+Claude アプリの「カスタムコネクタ」に `PUBLIC_URL`(= `https://SERVICE_URL/mcp`)を登録し、
+OAuth ログインを済ませると、`get_capabilities` / `search_fhir` 等が実機で使えます。
+
 ## 設定(環境変数)
 
 | 変数 | 既定 | 説明 |
@@ -99,6 +158,19 @@ claude mcp add fhir \
 | `FHIR_CLIENT_ID` / `FHIR_CLIENT_SECRET` | なし | SMART Backend Services のクレデンシャル。**両方未設定なら無認証モード**(Authorization ヘッダーを送らない。fhir-server の `FHIR_AUTH_ENABLED=false` 環境向け) |
 | `FHIR_MCP_ALLOW_WRITES` | `false` | `true` のときだけ書き込みツール(create/update/patch)を登録 |
 | `FHIR_MCP_MAX_COUNT` | `50` | 検索 `_count` の上限 |
+
+### Web版(HTTP)の追加設定
+
+| 変数 | 既定 | 説明 |
+|---|---|---|
+| `HTTP_PORT` / `PORT` | `8080` | HTTP 待受ポート(`PORT` は Cloud Run 用フォールバック) |
+| `PUBLIC_URL` | (必須) | このサーバーの公開 URL。OAuth メタデータ・リソース識別子に使用 |
+| `OAUTH_ISSUER_URL` | (必須) | 外部 IdP の issuer |
+| `OAUTH_AUTHORIZATION_URL` | (必須) | IdP の authorization エンドポイント |
+| `OAUTH_TOKEN_URL` | (必須) | IdP の token エンドポイント |
+| `OAUTH_JWKS_URL` | (必須) | アクセストークン検証用の JWKS |
+| `OAUTH_AUDIENCE` | (必須) | アクセストークンに期待する `aud` |
+| `OAUTH_REGISTRATION_URL` | なし | IdP の Dynamic Client Registration エンドポイント(任意) |
 
 ### 認証(SMART Backend Services)
 
@@ -179,7 +251,9 @@ MCP クライアント(Claude 等)
         ▼
 fhir-mcp-server
   ├── src/index.ts          エントリポイント(stdio transport)
-  ├── src/server.ts         McpServer 構築・ツール登録
+  ├── src/http.ts           エントリポイント(Streamable HTTP transport + OAuth)
+  ├── src/auth.ts           外部 IdP へ委譲する OAuth プロバイダ・JWT 検証
+  ├── src/server.ts         McpServer 構築・ツール登録(トランスポート非依存)
   ├── src/config.ts         環境変数の読み込み・検証
   ├── src/fhir-client.ts    FHIR REST 呼び出し(fhir+json、OperationOutcome 整形、401 リトライ)
   ├── src/token-manager.ts  SMART トークン管理(先回り更新)

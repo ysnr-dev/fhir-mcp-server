@@ -16,6 +16,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/http.ts",
+    "start:http": "node dist/http.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check src test",
@@ -24,10 +26,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^5.2.1",
+    "jose": "^5.10.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.15.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
