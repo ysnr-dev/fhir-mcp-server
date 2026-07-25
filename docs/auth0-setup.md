@@ -1,9 +1,11 @@
 # 外部 IdP セットアップ(Auth0)
 
 Web版(リモート HTTP MCP)の OAuth を Auth0 に委譲するための手順です。このサーバーは
-**Resource Server** として振る舞い、authorize/token/register は Auth0 に proxy します。
-アクセストークンの検証は、標準 OIDC の **opaque トークンを `/userinfo` で検証**します
-(M2M の JWT は JWKS でも検証。`src/auth.ts`)。
+**Resource Server** として振る舞い、authorize/token/register を Auth0 に proxy します。
+
+**Auth0 では DCR(動的クライアント登録)は使いません。** ダッシュボードで作成した
+**固定の first-party クライアント1つ**を全 MCP クライアントに配ります(理由は落とし穴1)。
+アクセストークンは JWT になり、JWKS で検証します(`src/auth.ts`)。
 
 > スコープ注記: この段階の OAuth は「MCP サーバーへ接続できる人を絞る入口」まで。
 > 認証ユーザー単位の FHIR アクセス制御は本番データ移行時の次フェーズ。
@@ -14,33 +16,37 @@ Web版(リモート HTTP MCP)の OAuth を Auth0 に委譲するための手順�
 
 MCP × Auth0 で必ず踏む4点。1〜2 は手順の中で、3〜4 はサーバー側の実装で対処済みです。
 
-1. **third-party(DCR)クライアントはカスタム API にアクセスできない**
-   Claude アプリは DCR で自己登録し、Auth0 ではそのクライアントが **third-party** 扱いになります。
-   Auth0 は third-party クライアントに**カスタム API(Resource Server)向けのトークン発行を拒否**し、
-   authorize が `Client ... is not authorized to access resource server ...` で失敗します。
-   さらに **テナントに Default Audience を設定すると、全 authorize 要求に強制的にその API の
-   audience が付く**ため、この拒否が常に発生します。
-   → 対処: **Default Audience は設定しない(設定済みなら解除)**。トークンは opaque になり、
-   本サーバーは `/userinfo` で検証する。カスタム API 向け JWT は使わない。
-   (M2M `client_credentials` は明示 audience を渡すので従来どおり JWT が出る = 検証ツール用)
+1. **DCR クライアントには使える audience が存在しない(=DCR は使えない)**
+   Claude アプリは DCR で自己登録し、Auth0 ではそのクライアントが **third-party** 扱いに
+   なります。third-party クライアントは、要求しうる**2つの audience の両方を拒否されます**:
 
-2. **Dynamic Client Registration(DCR)の有効化と domain connection**
-   Claude アプリはクライアントを自己登録(DCR)します。Auth0 で DCR を有効化すると、
-   登録されるアプリは **third-party** 扱いになり、**domain level に昇格した接続(connection)**
-   でしかログインできません。
-   → 対処: DCR を有効化し、使うログイン接続(DB or ソーシャル)を domain level に昇格する。
+   | authorize の audience | Auth0 の応答 |
+   |---|---|
+   | 指定なし(Auth0 が `/userinfo` を暗黙適用) | `The userinfo audience is not allowed for third party clients` |
+   | カスタム API(`OAUTH_AUDIENCE`) | `Client ... is not authorized to access resource server ...` |
+
+   選べる audience が残らないため、**ログイン成功後**のトークン発行段階で必ず失敗します
+   (Auth0 のログでは `stats.loginsCount: 1` が付いた失敗イベントとして見えます)。
+   → 対処: **DCR を使わず、ダッシュボードで作成した first-party クライアントを固定で使う**
+   (手順3)。`OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` / `OAUTH_CLIENT_REDIRECT_URIS` を
+   設定すると、本サーバーの `/register` は Auth0 に転送せず**その固定クライアントを返します**
+   (`src/auth.ts` の `Auth0ProxyOAuthProvider`)。
+
+   > 副次的な効果として、接続を試すたびに Auth0 のアプリが増える問題も消えます。放置すると
+   > テナントのエンティティ上限(`too_many_entities`)に達し、登録自体ができなくなります。
+
+2. **テナントの Default Audience は設定しない**
+   設定すると全 authorize 要求に強制的にその audience が付き、クライアント側で audience を
+   制御できなくなります。本サーバーは authorize ごとに `audience` を明示するため不要です。
 
 3. **`resource` パラメータ(RFC 8707)を Auth0 に転送してはいけない**
    MCP クライアントは仕様に従い `resource=<MCP サーバーの /mcp URL>` を authorize に付けます。
    Auth0 はこれを **API(Resource Server)の Identifier として解決**しようとするため、
    その識別子の API が存在しないと authorize 全体が
    `access_denied : Service not found: <URL>` で 403 になります。
-   該当 URL で API を作っても解決しません — 落とし穴1のとおり、Auth0 は third-party(DCR)
-   クライアントにカスタム API 向けトークンを発行しないためです。
-   → 対処: **サーバー側で `resource` を除去してから Auth0 に転送する**(`src/auth.ts` の
-   `CachingProxyOAuthProvider` で `authorize` / `exchangeAuthorizationCode` /
-   `exchangeRefreshToken` を override 済み)。本構成のトークンはそもそも audience に
-   束縛しない設計なので、この指定子は上流で意味を持ちません。
+   → 対処: **サーバー側で `resource` を除去し、代わりに Auth0 独自の `audience` を付ける**
+   (`src/auth.ts` の `Auth0ProxyOAuthProvider` で `authorize` /
+   `exchangeAuthorizationCode` / `exchangeRefreshToken` を override 済み)。
 
 4. **`mcpAuthRouter` の `issuerUrl` に IdP を渡してはいけない**
    SDK のルーターは `issuerUrl` を protected-resource メタデータの
@@ -73,30 +79,43 @@ Auth0 ダッシュボード → **Applications → APIs → Create API**
 > URL には紐づけず、上記のような安定した論理 URI を使う。`.env` の `OAUTH_AUDIENCE`
 > とこの値を**完全一致**(末尾スラッシュ含む)させること。
 
-### 2. Default Audience は設定しない(落とし穴1の対処)
+### 2. Default Audience は設定しない(落とし穴2の対処)
 
 **Settings(Tenant Settings) → General → API Authorization Settings → Default Audience**
 は **空のまま**にする(既に設定していれば**削除して保存**)。
 
-これにより interactive フロー(DCR/スマホ)のトークンは opaque になり、third-party
-クライアントでも authorize が通る。本サーバーは `/userinfo` でそのトークンを検証する。
+本サーバーは authorize ごとに `audience` を明示するため、テナント既定値は不要です。
 
-> 手順1の API 自体は残しておいてよい(M2M 検証で audience として使う)。ただし
-> **テナント全体の Default Audience にはしない**のがポイント。
+### 3. first-party クライアントを作成(落とし穴1の対処 / 最重要)
 
-### 3. DCR を有効化(落とし穴2の対処)
+**Applications → Applications → Create Application** で
+**Regular Web Application** を作成します(この経路で作れば first-party になります)。
 
-1. **Settings → Advanced → 「OIDC Dynamic Application Registration」** を ON。
-2. ログインに使う接続を domain level に昇格:
-   - DB 接続を使う場合: **Authentication → Database → (接続) → Applications** ではなく、
-     Management API で `is_domain_connection: true` にする(下記)。ソーシャル(Google 等)も同様。
-   - Management API 例(Auth0 の Explorer か curl):
-     ```
-     PATCH /api/v2/connections/{CONNECTION_ID}
-     { "is_domain_connection": true }
-     ```
-3. サードパーティアプリに同意画面をスキップさせたい場合は、テナントで
-   「Allow Skipping User Consent」等を検討(任意)。
+作成後、**Settings** タブで:
+
+| 項目 | 値 |
+|---|---|
+| Allowed Callback URLs | `https://claude.ai/api/mcp/auth_callback` |
+| Application Type | Regular Web Application |
+| Token Endpoint Authentication Method | `Post` または `Basic` |
+
+**Advanced Settings → Grant Types** で `Authorization Code` と `Refresh Token` を有効化。
+
+さらに **APIs** タブで手順1の `fhir-mcp-server` API を **Authorize** します。
+これをしないと `Client ... is not authorized to access resource server` になります。
+
+Client ID / Client Secret を `.env` に写します:
+
+```
+OAUTH_CLIENT_ID=<Client ID>
+OAUTH_CLIENT_SECRET=<Client Secret>
+OAUTH_CLIENT_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
+```
+
+> **DCR(OIDC Dynamic Application Registration)は有効化不要**です。有効なままでも、
+> 本サーバーの `/register` は Auth0 に転送せずこの固定クライアントを返すため使われません。
+> 接続に使う connection は、この作成したアプリケーションで有効化されていれば十分で、
+> domain level への昇格も不要です。
 
 ### 4. エンドポイント値を取得
 
@@ -108,8 +127,8 @@ Auth0 ダッシュボード → **Applications → APIs → Create API**
 | `OAUTH_AUTHORIZATION_URL` | `authorization_endpoint` | `.../authorize` |
 | `OAUTH_TOKEN_URL` | `token_endpoint` | `.../oauth/token` |
 | `OAUTH_JWKS_URL` | `jwks_uri` | `.../.well-known/jwks.json` |
-| `OAUTH_REGISTRATION_URL` | `registration_endpoint` | `.../oidc/register` |
-| `OAUTH_AUDIENCE` | (手順1の Identifier) | `https://YOUR-SERVICE.onrender.com/api` |
+| `OAUTH_REGISTRATION_URL` | `registration_endpoint` | `.../oidc/register`(DCR 用。Auth0 では未使用) |
+| `OAUTH_AUDIENCE` | (手順1の Identifier) | `https://fhir-mcp-server/api` |
 
 > `OAUTH_ISSUER_URL` は Auth0 の issuer と**完全一致**が必要(末尾スラッシュを消さないこと)。
 > 本サーバーの検証(`src/auth.ts`)は `iss`/`aud`/`exp` をチェックします。
@@ -159,22 +178,23 @@ Claude アプリを介さず、Machine-to-Machine トークンで `/mcp` の Bea
 
 - 接続時に 401 が出てログイン画面に飛ばない → `/.well-known/oauth-protected-resource/mcp`
   と `WWW-Authenticate` ヘッダが正しく出ているか(本サーバー側は確認済み)。
-- ログインは出るがトークンで弾かれる → 落とし穴1(Default Audience 未設定)。
-- クライアント登録で失敗 → 落とし穴2(DCR 無効 or domain connection 未昇格)、
-  `OAUTH_REGISTRATION_URL` 未設定。
+- ログインは通るがその後に失敗する → 落とし穴1。`OAUTH_CLIENT_ID` /
+  `OAUTH_CLIENT_SECRET` / `OAUTH_CLIENT_REDIRECT_URIS` が設定されているか、
+  手順3で API を Authorize したかを確認。
 
 **Auth0 の「Oops!, something went wrong」が出た場合**、そのページの
 **TECHNICAL DETAILS を開くと実際の原因が書いてあります**(切り分けはここが起点)。
 
 | TECHNICAL DETAILS の表示 | 原因 |
 |---|---|
+| `The userinfo audience is not allowed for third party clients` | 落とし穴1。DCR クライアントが使われている。`OAUTH_CLIENT_*` が未設定か、Auth0 側に反映されていない |
+| `Client ... is not authorized to access resource server ...` | 手順3の **APIs タブでの Authorize 漏れ**(または third-party クライアントで custom API を要求している) |
 | `access_denied : Service not found: <URL>` | 落とし穴3。`resource` が Auth0 に転送されている |
-| `invalid_request : Unknown client: tpc_...` | その client_id が Auth0 に無い。Auth0 側で DCR クライアントを削除したか、Claude が古い client_id を保持している。**Claude のコネクタを削除して登録し直す** |
-| `Client ... is not authorized to access resource server ...` | 落とし穴1。Default Audience が設定されている |
+| `invalid_request : Unknown client: tpc_...` | その client_id が Auth0 に無い。DCR 時代の古い client_id を Claude が保持している。**Claude のコネクタを削除して登録し直す** |
 
-なお、自サーバーが返す `400 {"error":"invalid_client"}`(JSON)は別物で、`src/auth.ts` の
-DCR キャッシュがプロセス再起動で消えたことを示します(Render Free のスリープ後など)。
-Auth0 の HTML エラーページとは区別すること。
+なお、自サーバーが返す `400 {"error":"invalid_client"}`(JSON)は別物で、送られた
+client_id が `OAUTH_CLIENT_ID` と一致しないことを示します(Claude が DCR 時代の
+古い client_id を保持している場合など)。Auth0 の HTML エラーページとは区別すること。
 
 ### Auth0 のログでプロキシのバイパスを見分ける
 

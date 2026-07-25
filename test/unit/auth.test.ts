@@ -48,11 +48,67 @@ describe("buildAuthRouterOptions", () => {
   });
 });
 
-describe("CachingProxyOAuthProvider", () => {
+describe("Auth0ProxyOAuthProvider with a fixed first-party client", () => {
+  const STATIC = {
+    ...OAUTH,
+    client: {
+      clientId: "fixed_client",
+      clientSecret: "s3cret",
+      redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
+    },
+  };
+
+  // Auth0 refuses a DCR (third-party) client both the implicit /userinfo
+  // audience and any custom API, leaving nothing it can ask for. Only a
+  // first-party client may name the API, so the audience rides along with it.
+  it("sends the configured audience to authorize", async () => {
+    const provider = buildOAuthProvider(STATIC);
+    const { res, url } = redirectSpy();
+
+    await provider.authorize(
+      { client_id: "fixed_client", redirect_uris: STATIC.client.redirectUris },
+      {
+        redirectUri: STATIC.client.redirectUris[0],
+        codeChallenge: "challenge",
+        scopes: ["openid", "profile"],
+        resource: new URL("https://fhir-mcp.example.com/mcp"),
+      },
+      res,
+    );
+
+    const target = new URL(url());
+    expect(target.searchParams.get("audience")).toBe("https://fhir-mcp.example.com/api");
+    expect(target.searchParams.get("resource")).toBeNull();
+  });
+
+  it("answers registration with the fixed client instead of calling the IdP", async () => {
+    const provider = buildOAuthProvider(STATIC);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    try {
+      const registered = await provider.clientsStore.registerClient?.(CLIENT);
+      expect(registered).toMatchObject({ client_id: "fixed_client", client_secret: "s3cret" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  // Resolving purely from config is what lets a restarted instance still
+  // recognise a client_id an MCP client stored earlier.
+  it("resolves the fixed client without any prior registration", async () => {
+    const provider = buildOAuthProvider(STATIC);
+    expect(await provider.clientsStore.getClient("fixed_client")).toMatchObject({
+      client_id: "fixed_client",
+    });
+    expect(await provider.clientsStore.getClient("someone_else")).toBeUndefined();
+  });
+});
+
+describe("Auth0ProxyOAuthProvider falling back to DCR", () => {
   // Auth0 resolves `resource` as an API identifier and fails the whole
   // authorization with `access_denied: Service not found` when no such API
-  // exists. Tokens here are deliberately not audience-bound, so the indicator
-  // must never reach the IdP.
+  // exists, so the indicator must never reach the IdP.
   it("does not forward the RFC 8707 resource indicator to authorize", async () => {
     const provider = buildOAuthProvider(OAUTH);
     const { res, url } = redirectSpy();
@@ -77,6 +133,8 @@ describe("CachingProxyOAuthProvider", () => {
     expect(target.searchParams.get("scope")).toBe("openid profile");
     expect(target.searchParams.get("state")).toBe("state123");
     expect(target.searchParams.get("code_challenge")).toBe("challenge");
+    // Without a first-party client there is no audience the IdP would accept.
+    expect(target.searchParams.get("audience")).toBeNull();
   });
 
   it("does not forward the resource indicator on either token exchange", async () => {

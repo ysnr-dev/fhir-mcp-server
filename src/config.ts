@@ -78,6 +78,23 @@ export interface OAuthConfig {
   jwksUrl: string;
   /** Expected `aud` claim of access tokens (this server's API identifier). */
   audience: string;
+  /**
+   * A pre-registered first-party client at the IdP. When set, MCP clients are
+   * handed this client instead of registering their own via DCR.
+   *
+   * Auth0 requires it: clients created by DCR are third-party, and Auth0 refuses
+   * to issue them tokens for both the implicit `/userinfo` audience *and* any
+   * custom API — leaving no audience a DCR client can actually use. A
+   * first-party application created in the dashboard has neither restriction.
+   */
+  client?: StaticClientConfig;
+}
+
+export interface StaticClientConfig {
+  clientId: string;
+  clientSecret: string;
+  /** Callback URLs, which must also be allowed on the IdP application. */
+  redirectUris: string[];
 }
 
 export const DEFAULT_HTTP_PORT = 8080;
@@ -104,9 +121,37 @@ export function loadHttpConfig(env: Record<string, string | undefined> = process
     registrationUrl: emptyToUndefined(env.OAUTH_REGISTRATION_URL),
     jwksUrl: requireEnv(env, "OAUTH_JWKS_URL"),
     audience: requireEnv(env, "OAUTH_AUDIENCE"),
+    client: loadStaticClient(env),
   };
 
   return { port, publicUrl: publicUrl.replace(/\/+$/, ""), oauth };
+}
+
+function loadStaticClient(env: Record<string, string | undefined>): StaticClientConfig | undefined {
+  const clientId = emptyToUndefined(env.OAUTH_CLIENT_ID);
+  const clientSecret = emptyToUndefined(env.OAUTH_CLIENT_SECRET);
+  const redirectUris = (emptyToUndefined(env.OAUTH_CLIENT_REDIRECT_URIS) ?? "")
+    .split(",")
+    .map((uri) => uri.trim())
+    .filter(Boolean);
+
+  if (!clientId && !clientSecret && redirectUris.length === 0) return undefined;
+  if (!clientId || !clientSecret || redirectUris.length === 0) {
+    throw new Error(
+      "OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET and OAUTH_CLIENT_REDIRECT_URIS must be set together " +
+        "(or all left unset to fall back to Dynamic Client Registration)",
+    );
+  }
+
+  for (const uri of redirectUris) {
+    try {
+      new URL(uri);
+    } catch {
+      throw new Error(`OAUTH_CLIENT_REDIRECT_URIS contains an invalid URL: ${uri}`);
+    }
+  }
+
+  return { clientId, clientSecret, redirectUris };
 }
 
 function requireEnv(env: Record<string, string | undefined>, name: string): string {

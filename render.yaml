@@ -49,3 +49,11 @@ services:
         sync: false
       - key: OAUTH_REGISTRATION_URL
         sync: false
+      # 固定 first-party クライアント。Auth0 では必須(DCR クライアントは
+      # third-party 扱いになり、使える audience が存在しないため)。
+      - key: OAUTH_CLIENT_ID
+        sync: false
+      - key: OAUTH_CLIENT_SECRET
+        sync: false
+      - key: OAUTH_CLIENT_REDIRECT_URIS
+        value: https://claude.ai/api/mcp/auth_callback

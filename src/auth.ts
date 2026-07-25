@@ -12,55 +12,110 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { HttpConfig, OAuthConfig } from "./config.js";
 
 /**
- * ProxyOAuthServerProvider adapted to Auth0 in two ways.
+ * ProxyOAuthServerProvider adapted to Auth0.
  *
- * **1. Remembers clients registered via Dynamic Client Registration.**
- * The base proxy provider forwards `/register` to the IdP but keeps no record of
- * the result, so on the subsequent `/authorize` the router's `getClient` lookup
- * has no `redirect_uris` to validate against and rejects the request. We cache
- * each DCR result in memory (registration → authorize happens within seconds of
- * a single connect), and fall back to "unknown client" for cache misses.
+ * **1. Hands out one pre-registered first-party client (when configured).**
+ * Auth0 marks every client created through Dynamic Client Registration as
+ * third-party, and then refuses such a client *both* audiences it could ask for:
+ * the implicit `/userinfo` one (`The userinfo audience is not allowed for third
+ * party clients`) and any custom API (`Client ... is not authorized to access
+ * resource server ...`). No audience is left, so the flow dies right after a
+ * successful login. A first-party application created in the Auth0 dashboard has
+ * neither restriction, so `/register` answers with that fixed client instead of
+ * forwarding registration upstream. This also stops MCP clients from creating a
+ * new Auth0 application on every connection attempt — enough of them will hit the
+ * tenant's entity limit and break registration outright.
  *
- * Note (demo constraint): the cache is per-instance and lost on restart. On a
- * Render Free instance that has slept, a client re-authorizing with a cached
- * client_id may need to re-register. Access-token verification is stateless
- * and unaffected.
+ * `getClient` is then a pure function of config, so a restarted instance still
+ * recognises a client_id an MCP client stored earlier.
  *
- * **2. Drops the RFC 8707 `resource` indicator.**
- * MCP clients send `resource=<this server's /mcp URL>`, and the base provider
- * forwards it to the IdP. Auth0 resolves `resource` as an API (Resource Server)
- * identifier and fails the whole authorization with
- * `access_denied: Service not found: <url>` when no such API exists. Registering
- * that API would not help either: Auth0 refuses to issue custom-API tokens to
- * third-party (DCR) clients — the very reason this deployment relies on opaque
- * user tokens verified via `/userinfo` (see `createTokenVerifier`). Since the
- * token is deliberately not audience-bound, the indicator carries no meaning
- * upstream and is stripped from authorize and both token exchanges.
+ * **2. Falls back to caching DCR results** when no fixed client is configured,
+ * for IdPs that do allow it. The base provider forwards `/register` upstream but
+ * keeps no record, so the subsequent `/authorize` has no `redirect_uris` to
+ * validate against and is rejected. That cache is per-instance and lost on
+ * restart.
+ *
+ * **3. Drops the RFC 8707 `resource` indicator and sets `audience` instead.**
+ * MCP clients send `resource=<this server's /mcp URL>`; Auth0 resolves it as an
+ * API identifier and fails the authorization with
+ * `access_denied: Service not found: <url>`. Auth0 expects the non-standard
+ * `audience` parameter for the same purpose, so the indicator is replaced by the
+ * configured audience whenever a fixed client makes a custom API reachable.
  */
-class CachingProxyOAuthProvider extends ProxyOAuthServerProvider {
-  private readonly clients = new Map<string, OAuthClientInformationFull>();
+class Auth0ProxyOAuthProvider extends ProxyOAuthServerProvider {
+  private readonly dcrClients = new Map<string, OAuthClientInformationFull>();
+  private readonly staticClient?: OAuthClientInformationFull;
+  private readonly audience?: string;
+
+  constructor(oauth: OAuthConfig) {
+    super({
+      endpoints: {
+        authorizationUrl: oauth.authorizationUrl,
+        tokenUrl: oauth.tokenUrl,
+        registrationUrl: oauth.registrationUrl,
+      },
+      verifyAccessToken: createTokenVerifier(oauth),
+      // Unknown until registered; the stores below supply real clients.
+      getClient: async () => undefined,
+    });
+
+    if (oauth.client) {
+      this.staticClient = {
+        client_id: oauth.client.clientId,
+        client_secret: oauth.client.clientSecret,
+        redirect_uris: oauth.client.redirectUris,
+      };
+      // Only a first-party client may request a custom API audience.
+      this.audience = oauth.audience;
+    }
+  }
 
   get clientsStore(): OAuthRegisteredClientsStore {
+    const staticClient = this.staticClient;
+    if (staticClient) {
+      return {
+        getClient: async (clientId) =>
+          clientId === staticClient.client_id ? staticClient : undefined,
+        // Answer DCR locally: nothing is created at the IdP.
+        registerClient: async () => staticClient,
+      };
+    }
+
     const baseRegister = super.clientsStore.registerClient;
     return {
-      getClient: async (clientId) => this.clients.get(clientId),
+      getClient: async (clientId) => this.dcrClients.get(clientId),
       registerClient: baseRegister
         ? async (client) => {
             const registered = await baseRegister(client);
-            this.clients.set(registered.client_id, registered);
+            this.dcrClients.set(registered.client_id, registered);
             return registered;
           }
         : undefined,
     };
   }
 
+  /**
+   * Rebuilds the upstream authorization URL. `params.resource` is deliberately
+   * dropped; see the class doc.
+   */
   async authorize(
     client: OAuthClientInformationFull,
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
-    const { resource: _resource, ...rest } = params;
-    return super.authorize(client, rest, res);
+    const target = new URL(this._endpoints.authorizationUrl);
+    const search = new URLSearchParams({
+      client_id: client.client_id,
+      response_type: "code",
+      redirect_uri: params.redirectUri,
+      code_challenge: params.codeChallenge,
+      code_challenge_method: "S256",
+    });
+    if (params.state) search.set("state", params.state);
+    if (params.scopes?.length) search.set("scope", params.scopes.join(" "));
+    if (this.audience) search.set("audience", this.audience);
+    target.search = search.toString();
+    res.redirect(target.toString());
   }
 
   async exchangeAuthorizationCode(
@@ -93,16 +148,7 @@ class CachingProxyOAuthProvider extends ProxyOAuthServerProvider {
  * to use the fixed SMART Backend Services credentials.
  */
 export function buildOAuthProvider(oauth: OAuthConfig): ProxyOAuthServerProvider {
-  return new CachingProxyOAuthProvider({
-    endpoints: {
-      authorizationUrl: oauth.authorizationUrl,
-      tokenUrl: oauth.tokenUrl,
-      registrationUrl: oauth.registrationUrl,
-    },
-    verifyAccessToken: createTokenVerifier(oauth),
-    // Unknown until registered; the cached store above supplies real clients.
-    getClient: async () => undefined,
-  });
+  return new Auth0ProxyOAuthProvider(oauth);
 }
 
 /**
@@ -130,16 +176,16 @@ export function buildAuthRouterOptions(http: HttpConfig): Omit<AuthRouterOptions
  * Verifies an IdP access token and returns the AuthInfo the SDK attaches to the
  * request.
  *
- * Two token shapes are accepted, because Auth0 issues different tokens to
- * different clients:
+ * Two token shapes are accepted, because Auth0 issues different tokens depending
+ * on whether an `audience` was requested:
  *
- * - **Opaque user access token** (the interactive DCR / mobile flow). Auth0
- *   forbids third-party (DCR) clients from obtaining custom-API JWTs, so the
- *   tenant must NOT set a Default Audience; the token is then opaque and is
- *   validated by calling the IdP's `/userinfo` endpoint.
- * - **JWT** (the Machine-to-Machine `client_credentials` flow, which passes an
- *   explicit `audience`). Verified locally against the IdP's JWKS. Kept so the
- *   verification tooling (`scripts/verify-oauth.sh`) keeps working.
+ * - **JWT**, verified locally against the IdP's JWKS. This is the normal path:
+ *   both the interactive login (a fixed first-party client passing `audience`,
+ *   see `Auth0ProxyOAuthProvider`) and the Machine-to-Machine
+ *   `client_credentials` flow used by `scripts/verify-oauth.sh` produce one.
+ * - **Opaque access token**, validated by calling the IdP's `/userinfo`
+ *   endpoint. Reached when no audience is in play — e.g. an IdP that issues
+ *   opaque tokens, or a deployment left on Dynamic Client Registration.
  */
 export function createTokenVerifier(oauth: OAuthConfig): (token: string) => Promise<AuthInfo> {
   const jwks = createRemoteJWKSet(new URL(oauth.jwksUrl));
