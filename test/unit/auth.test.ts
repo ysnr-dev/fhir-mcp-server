@@ -1,7 +1,7 @@
 import type { Response } from "express";
 import { describe, expect, it, vi } from "vitest";
-import { buildOAuthProvider } from "../../src/auth.js";
-import type { OAuthConfig } from "../../src/config.js";
+import { buildAuthRouterOptions, buildOAuthProvider } from "../../src/auth.js";
+import type { HttpConfig, OAuthConfig } from "../../src/config.js";
 
 const OAUTH: OAuthConfig = {
   issuerUrl: "https://idp.example.com/",
@@ -27,6 +27,26 @@ function redirectSpy(): { res: Response; url: () => string } {
   } as unknown as Response;
   return { res, url: () => captured };
 }
+
+describe("buildAuthRouterOptions", () => {
+  const http: HttpConfig = {
+    port: 8080,
+    publicUrl: "https://fhir-mcp.example.com",
+    oauth: OAUTH,
+  };
+
+  // The router publishes issuerUrl as `authorization_servers` in the
+  // protected-resource metadata. Naming the IdP there makes clients drive the
+  // IdP directly and bypass this proxy — discovery still succeeds, so the
+  // breakage only surfaces later at the IdP.
+  it("advertises this server as the authorization server, not the IdP", () => {
+    const options = buildAuthRouterOptions(http);
+    expect(options.issuerUrl.href).toBe("https://fhir-mcp.example.com/");
+    expect(options.issuerUrl.href).not.toContain("idp.example.com");
+    expect(options.baseUrl?.href).toBe("https://fhir-mcp.example.com/");
+    expect(options.resourceServerUrl?.href).toBe("https://fhir-mcp.example.com/mcp");
+  });
+});
 
 describe("CachingProxyOAuthProvider", () => {
   // Auth0 resolves `resource` as an API identifier and fails the whole

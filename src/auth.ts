@@ -1,6 +1,7 @@
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import { ProxyOAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/providers/proxyProvider.js";
+import type { AuthRouterOptions } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type {
   OAuthClientInformationFull,
@@ -8,7 +9,7 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { Response } from "express";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import type { OAuthConfig } from "./config.js";
+import type { HttpConfig, OAuthConfig } from "./config.js";
 
 /**
  * ProxyOAuthServerProvider adapted to Auth0 in two ways.
@@ -102,6 +103,27 @@ export function buildOAuthProvider(oauth: OAuthConfig): ProxyOAuthServerProvider
     // Unknown until registered; the cached store above supplies real clients.
     getClient: async () => undefined,
   });
+}
+
+/**
+ * Metadata settings for `mcpAuthRouter`, minus the provider.
+ *
+ * `issuerUrl` is deliberately **this server**, not the IdP. The router publishes
+ * it as `authorization_servers` in the protected-resource metadata, so naming the
+ * IdP there makes clients fetch the IdP's own metadata and drive the IdP
+ * directly — bypassing this proxy and every upstream quirk it absorbs (Auth0
+ * rejecting the RFC 8707 `resource` indicator, DCR results going uncached).
+ * The failure is silent: discovery still succeeds and the flow only breaks later,
+ * at the IdP.
+ */
+export function buildAuthRouterOptions(http: HttpConfig): Omit<AuthRouterOptions, "provider"> {
+  return {
+    issuerUrl: new URL(http.publicUrl),
+    baseUrl: new URL(http.publicUrl),
+    resourceServerUrl: new URL(`${http.publicUrl}/mcp`),
+    scopesSupported: ["openid", "profile"],
+    resourceName: "fhir-mcp-server",
+  };
 }
 
 /**

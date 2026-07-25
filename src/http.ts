@@ -8,7 +8,7 @@ import {
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import express, { type Request, type Response } from "express";
-import { buildOAuthProvider } from "./auth.js";
+import { buildAuthRouterOptions, buildOAuthProvider } from "./auth.js";
 import { loadConfig, loadHttpConfig } from "./config.js";
 import { buildServer } from "./server.js";
 
@@ -27,16 +27,7 @@ async function main(): Promise<void> {
 
   // OAuth metadata + authorize/token/register proxy to the external IdP,
   // plus this server's protected-resource metadata. Must be mounted at root.
-  app.use(
-    mcpAuthRouter({
-      provider,
-      issuerUrl: new URL(http.oauth.issuerUrl),
-      baseUrl: new URL(http.publicUrl),
-      resourceServerUrl: new URL(`${http.publicUrl}/mcp`),
-      scopesSupported: ["openid", "profile"],
-      resourceName: "fhir-mcp-server",
-    }),
-  );
+  app.use(mcpAuthRouter({ provider, ...buildAuthRouterOptions(http) }));
 
   const bearerAuth = requireBearerAuth({
     verifier: provider,

@@ -12,7 +12,7 @@ Web版(リモート HTTP MCP)の OAuth を Auth0 に委譲するための手順�
 
 ## 前提の落とし穴(先に把握しておく)
 
-MCP × Auth0 で必ず踏む3点。1〜2 は手順の中で、3 はサーバー側の実装で対処済みです。
+MCP × Auth0 で必ず踏む4点。1〜2 は手順の中で、3〜4 はサーバー側の実装で対処済みです。
 
 1. **third-party(DCR)クライアントはカスタム API にアクセスできない**
    Claude アプリは DCR で自己登録し、Auth0 ではそのクライアントが **third-party** 扱いになります。
@@ -41,6 +41,18 @@ MCP × Auth0 で必ず踏む3点。1〜2 は手順の中で、3 はサーバー�
    `CachingProxyOAuthProvider` で `authorize` / `exchangeAuthorizationCode` /
    `exchangeRefreshToken` を override 済み)。本構成のトークンはそもそも audience に
    束縛しない設計なので、この指定子は上流で意味を持ちません。
+
+4. **`mcpAuthRouter` の `issuerUrl` に IdP を渡してはいけない**
+   SDK のルーターは `issuerUrl` を protected-resource メタデータの
+   `authorization_servers` としてそのまま公開します(`auth/router.ts`)。ここに Auth0 を
+   指定すると、クライアントは仕様どおりそれを辿って **Auth0 のメタデータを直接取得し、
+   Auth0 の authorize/token/register を直接叩きます**。本サーバーのプロキシは一切
+   経由されず、落とし穴3の `resource` 除去も DCR クライアントのキャッシュも無効化されます。
+   → 対処: **`issuerUrl` には本サーバーの `PUBLIC_URL` を渡す**(`src/auth.ts` の
+   `buildAuthRouterOptions`)。
+
+   厄介なのは**失敗が静かなこと**です。ディスカバリは成功し、接続も始まり、
+   IdP に着いてから初めて壊れるため、サーバー側のログには何も残りません。
 
 ---
 
@@ -163,3 +175,15 @@ Claude アプリを介さず、Machine-to-Machine トークンで `/mcp` の Bea
 なお、自サーバーが返す `400 {"error":"invalid_client"}`(JSON)は別物で、`src/auth.ts` の
 DCR キャッシュがプロセス再起動で消えたことを示します(Render Free のスリープ後など)。
 Auth0 の HTML エラーページとは区別すること。
+
+### Auth0 のログでプロキシのバイパスを見分ける
+
+Auth0 ダッシュボード → **Monitoring → Logs** で該当イベントの `details.qs` を見ます。
+本サーバーの `/authorize` は URL を組み立て直すため、**転送するのは
+`client_id` / `response_type` / `redirect_uri` / `code_challenge` /
+`code_challenge_method` / `state` / `scope` の7つだけ**です。
+
+`qs` にそれ以外(`prompt`、`resource` 等)が入っていたら、**クライアントが
+プロキシを経由せず Auth0 を直接叩いている**ということです(落とし穴4)。
+`client_name` が `Claude` のように**こちらが登録していない名前**になっているのも
+同じ兆候で、DCR も直接 Auth0 に対して行われています。
