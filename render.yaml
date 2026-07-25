@@ -10,7 +10,7 @@
 #     デモ用途のため許容。安定運用が必要なら plan を starter に変更する。
 services:
   - type: web
-    name: fhir-mcp-server
+    name: ysnr-fhir-mcp-server
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free

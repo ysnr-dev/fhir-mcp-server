@@ -61,27 +61,60 @@ export function buildOAuthProvider(oauth: OAuthConfig): ProxyOAuthServerProvider
 }
 
 /**
- * Verifies an IdP-issued JWT access token against the IdP's JWKS, checking the
- * issuer and audience. Returns the AuthInfo the SDK attaches to the request.
+ * Verifies an IdP access token and returns the AuthInfo the SDK attaches to the
+ * request.
+ *
+ * Two token shapes are accepted, because Auth0 issues different tokens to
+ * different clients:
+ *
+ * - **Opaque user access token** (the interactive DCR / mobile flow). Auth0
+ *   forbids third-party (DCR) clients from obtaining custom-API JWTs, so the
+ *   tenant must NOT set a Default Audience; the token is then opaque and is
+ *   validated by calling the IdP's `/userinfo` endpoint.
+ * - **JWT** (the Machine-to-Machine `client_credentials` flow, which passes an
+ *   explicit `audience`). Verified locally against the IdP's JWKS. Kept so the
+ *   verification tooling (`scripts/verify-oauth.sh`) keeps working.
  */
 export function createTokenVerifier(oauth: OAuthConfig): (token: string) => Promise<AuthInfo> {
   const jwks = createRemoteJWKSet(new URL(oauth.jwksUrl));
+  const userinfoUrl = new URL("/userinfo", oauth.issuerUrl).toString();
 
   return async (token: string): Promise<AuthInfo> => {
-    const { payload } = await jwtVerify(token, jwks, {
-      issuer: oauth.issuerUrl,
-      audience: oauth.audience,
+    // A three-segment token is a JWT (M2M). Verify it locally; on any failure
+    // fall through to /userinfo, since opaque tokens also can't be parsed here.
+    if (token.split(".").length === 3) {
+      try {
+        const { payload } = await jwtVerify(token, jwks, {
+          issuer: oauth.issuerUrl,
+          audience: oauth.audience,
+        });
+        const scopes =
+          typeof payload.scope === "string" ? payload.scope.split(" ").filter(Boolean) : [];
+        return {
+          token,
+          clientId: typeof payload.azp === "string" ? payload.azp : (payload.sub ?? ""),
+          scopes,
+          expiresAt: payload.exp,
+          extra: { sub: payload.sub },
+        };
+      } catch {
+        // Not a JWT we can verify; treat as opaque below.
+      }
+    }
+
+    // Opaque user access token: valid iff /userinfo accepts it.
+    const response = await fetch(userinfoUrl, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-
-    const scopes =
-      typeof payload.scope === "string" ? payload.scope.split(" ").filter(Boolean) : [];
-
+    if (!response.ok) {
+      throw new Error(`Access token rejected by userinfo (HTTP ${response.status})`);
+    }
+    const profile = (await response.json()) as { sub?: string };
     return {
       token,
-      clientId: typeof payload.azp === "string" ? payload.azp : (payload.sub ?? ""),
-      scopes,
-      expiresAt: payload.exp,
-      extra: { sub: payload.sub },
+      clientId: profile.sub ?? "",
+      scopes: [],
+      extra: { sub: profile.sub },
     };
   };
 }

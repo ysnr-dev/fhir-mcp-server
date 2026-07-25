@@ -1,8 +1,9 @@
 # 外部 IdP セットアップ(Auth0)
 
 Web版(リモート HTTP MCP)の OAuth を Auth0 に委譲するための手順です。このサーバーは
-**Resource Server** として振る舞い、authorize/token/register は Auth0 に proxy し、
-アクセストークン(JWT)を JWKS で検証します(`src/auth.ts`)。
+**Resource Server** として振る舞い、authorize/token/register は Auth0 に proxy します。
+アクセストークンの検証は、標準 OIDC の **opaque トークンを `/userinfo` で検証**します
+(M2M の JWT は JWKS でも検証。`src/auth.ts`)。
 
 > スコープ注記: この段階の OAuth は「MCP サーバーへ接続できる人を絞る入口」まで。
 > 認証ユーザー単位の FHIR アクセス制御は本番データ移行時の次フェーズ。
@@ -13,13 +14,15 @@ Web版(リモート HTTP MCP)の OAuth を Auth0 に委譲するための手順�
 
 MCP × Auth0 で必ず踏む2点。手順の中で対処します。
 
-1. **アクセストークンが JWT にならない問題**
-   MCP クライアント(Claude)は RFC 8707 の `resource` パラメータでトークンを要求しますが、
-   Auth0 は `audience` パラメータを見て「どの API 向けの JWT か」を決めます。両者が噛み合わず、
-   `audience` が渡らないと Auth0 は **JWT ではなく userinfo 用の opaque トークン**を発行し、
-   本サーバーの JWT 検証が失敗します。
-   → 対処: **テナントの Default Audience を、作成する API の Identifier に設定**する
-   (これで audience 明示なしでも対象 API 向け JWT が出る)。
+1. **third-party(DCR)クライアントはカスタム API にアクセスできない**
+   Claude アプリは DCR で自己登録し、Auth0 ではそのクライアントが **third-party** 扱いになります。
+   Auth0 は third-party クライアントに**カスタム API(Resource Server)向けのトークン発行を拒否**し、
+   authorize が `Client ... is not authorized to access resource server ...` で失敗します。
+   さらに **テナントに Default Audience を設定すると、全 authorize 要求に強制的にその API の
+   audience が付く**ため、この拒否が常に発生します。
+   → 対処: **Default Audience は設定しない(設定済みなら解除)**。トークンは opaque になり、
+   本サーバーは `/userinfo` で検証する。カスタム API 向け JWT は使わない。
+   (M2M `client_credentials` は明示 audience を渡すので従来どおり JWT が出る = 検証ツール用)
 
 2. **Dynamic Client Registration(DCR)の有効化と domain connection**
    Claude アプリはクライアントを自己登録(DCR)します。Auth0 で DCR を有効化すると、
@@ -46,10 +49,16 @@ Auth0 ダッシュボード → **Applications → APIs → Create API**
 > URL には紐づけず、上記のような安定した論理 URI を使う。`.env` の `OAUTH_AUDIENCE`
 > とこの値を**完全一致**(末尾スラッシュ含む)させること。
 
-### 2. Default Audience を設定(落とし穴1の対処)
+### 2. Default Audience は設定しない(落とし穴1の対処)
 
 **Settings(Tenant Settings) → General → API Authorization Settings → Default Audience**
-に、手順1の Identifier(`https://YOUR-SERVICE.onrender.com/api`)を設定して保存。
+は **空のまま**にする(既に設定していれば**削除して保存**)。
+
+これにより interactive フロー(DCR/スマホ)のトークンは opaque になり、third-party
+クライアントでも authorize が通る。本サーバーは `/userinfo` でそのトークンを検証する。
+
+> 手順1の API 自体は残しておいてよい(M2M 検証で audience として使う)。ただし
+> **テナント全体の Default Audience にはしない**のがポイント。
 
 ### 3. DCR を有効化(落とし穴2の対処)
 
