@@ -12,7 +12,7 @@ Web版(リモート HTTP MCP)の OAuth を Auth0 に委譲するための手順�
 
 ## 前提の落とし穴(先に把握しておく)
 
-MCP × Auth0 で必ず踏む2点。手順の中で対処します。
+MCP × Auth0 で必ず踏む3点。1〜2 は手順の中で、3 はサーバー側の実装で対処済みです。
 
 1. **third-party(DCR)クライアントはカスタム API にアクセスできない**
    Claude アプリは DCR で自己登録し、Auth0 ではそのクライアントが **third-party** 扱いになります。
@@ -29,6 +29,18 @@ MCP × Auth0 で必ず踏む2点。手順の中で対処します。
    登録されるアプリは **third-party** 扱いになり、**domain level に昇格した接続(connection)**
    でしかログインできません。
    → 対処: DCR を有効化し、使うログイン接続(DB or ソーシャル)を domain level に昇格する。
+
+3. **`resource` パラメータ(RFC 8707)を Auth0 に転送してはいけない**
+   MCP クライアントは仕様に従い `resource=<MCP サーバーの /mcp URL>` を authorize に付けます。
+   Auth0 はこれを **API(Resource Server)の Identifier として解決**しようとするため、
+   その識別子の API が存在しないと authorize 全体が
+   `access_denied : Service not found: <URL>` で 403 になります。
+   該当 URL で API を作っても解決しません — 落とし穴1のとおり、Auth0 は third-party(DCR)
+   クライアントにカスタム API 向けトークンを発行しないためです。
+   → 対処: **サーバー側で `resource` を除去してから Auth0 に転送する**(`src/auth.ts` の
+   `CachingProxyOAuthProvider` で `authorize` / `exchangeAuthorizationCode` /
+   `exchangeRefreshToken` を override 済み)。本構成のトークンはそもそも audience に
+   束縛しない設計なので、この指定子は上流で意味を持ちません。
 
 ---
 
@@ -138,3 +150,16 @@ Claude アプリを介さず、Machine-to-Machine トークンで `/mcp` の Bea
 - ログインは出るがトークンで弾かれる → 落とし穴1(Default Audience 未設定)。
 - クライアント登録で失敗 → 落とし穴2(DCR 無効 or domain connection 未昇格)、
   `OAUTH_REGISTRATION_URL` 未設定。
+
+**Auth0 の「Oops!, something went wrong」が出た場合**、そのページの
+**TECHNICAL DETAILS を開くと実際の原因が書いてあります**(切り分けはここが起点)。
+
+| TECHNICAL DETAILS の表示 | 原因 |
+|---|---|
+| `access_denied : Service not found: <URL>` | 落とし穴3。`resource` が Auth0 に転送されている |
+| `invalid_request : Unknown client: tpc_...` | その client_id が Auth0 に無い。Auth0 側で DCR クライアントを削除したか、Claude が古い client_id を保持している。**Claude のコネクタを削除して登録し直す** |
+| `Client ... is not authorized to access resource server ...` | 落とし穴1。Default Audience が設定されている |
+
+なお、自サーバーが返す `400 {"error":"invalid_client"}`(JSON)は別物で、`src/auth.ts` の
+DCR キャッシュがプロセス再起動で消えたことを示します(Render Free のスリープ後など)。
+Auth0 の HTML エラーページとは区別すること。

@@ -1,14 +1,19 @@
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
+import type { AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import { ProxyOAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/providers/proxyProvider.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type {
+  OAuthClientInformationFull,
+  OAuthTokens,
+} from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { Response } from "express";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { OAuthConfig } from "./config.js";
 
 /**
- * ProxyOAuthServerProvider whose client store remembers clients registered via
- * Dynamic Client Registration.
+ * ProxyOAuthServerProvider adapted to Auth0 in two ways.
  *
+ * **1. Remembers clients registered via Dynamic Client Registration.**
  * The base proxy provider forwards `/register` to the IdP but keeps no record of
  * the result, so on the subsequent `/authorize` the router's `getClient` lookup
  * has no `redirect_uris` to validate against and rejects the request. We cache
@@ -18,7 +23,18 @@ import type { OAuthConfig } from "./config.js";
  * Note (demo constraint): the cache is per-instance and lost on restart. On a
  * Render Free instance that has slept, a client re-authorizing with a cached
  * client_id may need to re-register. Access-token verification is stateless
- * (JWKS) and unaffected.
+ * and unaffected.
+ *
+ * **2. Drops the RFC 8707 `resource` indicator.**
+ * MCP clients send `resource=<this server's /mcp URL>`, and the base provider
+ * forwards it to the IdP. Auth0 resolves `resource` as an API (Resource Server)
+ * identifier and fails the whole authorization with
+ * `access_denied: Service not found: <url>` when no such API exists. Registering
+ * that API would not help either: Auth0 refuses to issue custom-API tokens to
+ * third-party (DCR) clients — the very reason this deployment relies on opaque
+ * user tokens verified via `/userinfo` (see `createTokenVerifier`). Since the
+ * token is deliberately not audience-bound, the indicator carries no meaning
+ * upstream and is stripped from authorize and both token exchanges.
  */
 class CachingProxyOAuthProvider extends ProxyOAuthServerProvider {
   private readonly clients = new Map<string, OAuthClientInformationFull>();
@@ -35,6 +51,34 @@ class CachingProxyOAuthProvider extends ProxyOAuthServerProvider {
           }
         : undefined,
     };
+  }
+
+  async authorize(
+    client: OAuthClientInformationFull,
+    params: AuthorizationParams,
+    res: Response,
+  ): Promise<void> {
+    const { resource: _resource, ...rest } = params;
+    return super.authorize(client, rest, res);
+  }
+
+  async exchangeAuthorizationCode(
+    client: OAuthClientInformationFull,
+    authorizationCode: string,
+    codeVerifier?: string,
+    redirectUri?: string,
+    _resource?: URL,
+  ): Promise<OAuthTokens> {
+    return super.exchangeAuthorizationCode(client, authorizationCode, codeVerifier, redirectUri);
+  }
+
+  async exchangeRefreshToken(
+    client: OAuthClientInformationFull,
+    refreshToken: string,
+    scopes?: string[],
+    _resource?: URL,
+  ): Promise<OAuthTokens> {
+    return super.exchangeRefreshToken(client, refreshToken, scopes);
   }
 }
 
