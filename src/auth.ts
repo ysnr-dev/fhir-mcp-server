@@ -64,6 +64,17 @@ class Auth0ProxyOAuthProvider extends ProxyOAuthServerProvider {
         client_id: oauth.client.clientId,
         client_secret: oauth.client.clientSecret,
         redirect_uris: oauth.client.redirectUris,
+        // RFC 7591 §3.2.1 requires this whenever a client_secret is issued; 0 is
+        // "never expires". MCP clients reject a registration response without it.
+        client_secret_expires_at: 0,
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        // Must be stated explicitly. RFC 7591 defaults an omitted value to
+        // `client_secret_basic`, but the SDK's client authentication reads
+        // credentials from the request body only (see auth/middleware/clientAuth),
+        // so a client taking that default fails to authenticate at /token.
+        token_endpoint_auth_method: "client_secret_post",
+        client_name: "fhir-mcp-server",
       };
       // Only a first-party client may request a custom API audience.
       this.audience = oauth.audience;

@@ -97,7 +97,7 @@ Auth0 ダッシュボード → **Applications → APIs → Create API**
 |---|---|
 | Allowed Callback URLs | `https://claude.ai/api/mcp/auth_callback` |
 | Application Type | Regular Web Application |
-| Token Endpoint Authentication Method | `Post` または `Basic` |
+| Token Endpoint Authentication Method | **`Post`**(本サーバーは client_secret をボディで送るため) |
 
 **Advanced Settings → Grant Types** で `Authorization Code` と `Refresh Token` を有効化。
 

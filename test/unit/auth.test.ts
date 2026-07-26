@@ -94,6 +94,20 @@ describe("Auth0ProxyOAuthProvider with a fixed first-party client", () => {
     }
   });
 
+  // RFC 7591 requires client_secret_expires_at alongside an issued secret, and
+  // defaults an omitted token_endpoint_auth_method to client_secret_basic — which
+  // the SDK's client authentication cannot read, since it only parses the request
+  // body. Either omission breaks the token exchange after a successful login.
+  it("returns the registration metadata clients need to authenticate", async () => {
+    const provider = buildOAuthProvider(STATIC);
+    const registered = await provider.clientsStore.registerClient?.(CLIENT);
+
+    expect(registered?.client_secret_expires_at).toBe(0);
+    expect(registered?.token_endpoint_auth_method).toBe("client_secret_post");
+    expect(registered?.grant_types).toEqual(["authorization_code", "refresh_token"]);
+    expect(registered?.response_types).toEqual(["code"]);
+  });
+
   // Resolving purely from config is what lets a restarted instance still
   // recognise a client_id an MCP client stored earlier.
   it("resolves the fixed client without any prior registration", async () => {
