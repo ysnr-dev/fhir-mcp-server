@@ -91,21 +91,33 @@ Auth0 ダッシュボード → **Applications → APIs → Create API**
 **Applications → Applications → Create Application** で
 **Regular Web Application** を作成します(この経路で作れば first-party になります)。
 
-作成後、**Settings** タブで:
+作成後、**設定(Settings)** タブで:
 
 | 項目 | 値 |
 |---|---|
 | Allowed Callback URLs | `https://claude.ai/api/mcp/auth_callback` |
 | Application Type | Regular Web Application |
-| Token Endpoint Authentication Method | **`Post`**(本サーバーは client_secret をボディで送るため) |
 
 **Advanced Settings → Grant Types** で `Authorization Code` と `Refresh Token` を有効化。
 
-> **APIs(APIアクセス)タブでの明示的な認可は不要**です。認可コードフローでは
-> **first-party であること自体**が条件で、`audience` を要求できます(実測で確認済み)。
-> あのタブのトグルは client grant を作るもので、`client_credentials` を使う
-> M2M アプリ向けです。third-party クライアントだと、ここを何も触らない状態で
-> `Client ... is not authorized to access resource server` になります。
+**資格情報(Credentials)** タブ → **アプリケーション認証** で
+**「クライアントシークレット(Post)」** を選択(本サーバーは client_secret をボディで送るため)。
+
+#### API へのアクセスを個別に認可する(忘れやすい)
+
+**APIアクセス**タブ → `fhir-mcp-server` の行の **「編集」** →
+**「ユーザー委任アクセス」を「認可済」** にして権限を選び、保存します。
+これが認可コードフロー用の client grant です。「クライアントアクセス」は
+`client_credentials` 用なので、このアプリでは不要です。
+
+> API 側の **「サードパーティーアプリケーションのデフォルトの権限」は無関係**です。
+> あれは third-party アプリ向けの既定値で、first-party のこのアプリには適用されません。
+
+> **この認可はブラウザで実際にログインするまで検証できません。** Auth0 は
+> **認証を終えてから** audience の認可を確認するため、セッションの無い curl で
+> `/authorize` を叩くと、認可されていなくてもログイン画面への 302 が返ります。
+> 未認可のまま接続すると、**ログイン成功後**に
+> `Client ... is not authorized to access resource server ...` で失敗します。
 
 Client ID / Client Secret を `.env` に写します:
 
@@ -191,7 +203,7 @@ Claude アプリを介さず、Machine-to-Machine トークンで `/mcp` の Bea
 | TECHNICAL DETAILS の表示 | 原因 |
 |---|---|
 | `The userinfo audience is not allowed for third party clients` | 落とし穴1。DCR クライアントが使われている。`OAUTH_CLIENT_*` が未設定か、Auth0 側に反映されていない |
-| `Client ... is not authorized to access resource server ...` | third-party クライアントで custom API の audience を要求している。DCR 由来の client_id が使われていないか確認 |
+| `Client ... is not authorized to access resource server ...` | 手順3の **APIアクセスタブ「ユーザー委任アクセス」の ON 漏れ**。または DCR 由来の third-party な client_id が使われている |
 | `access_denied : Service not found: <URL>` | 落とし穴3。`resource` が Auth0 に転送されている |
 | `invalid_request : Unknown client: tpc_...` | その client_id が Auth0 に無い。DCR 時代の古い client_id を Claude が保持している。**Claude のコネクタを削除して登録し直す** |
 
