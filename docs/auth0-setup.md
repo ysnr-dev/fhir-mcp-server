@@ -101,8 +101,11 @@ Auth0 ダッシュボード → **Applications → APIs → Create API**
 
 **Advanced Settings → Grant Types** で `Authorization Code` と `Refresh Token` を有効化。
 
-さらに **APIs** タブで手順1の `fhir-mcp-server` API を **Authorize** します。
-これをしないと `Client ... is not authorized to access resource server` になります。
+> **APIs(APIアクセス)タブでの明示的な認可は不要**です。認可コードフローでは
+> **first-party であること自体**が条件で、`audience` を要求できます(実測で確認済み)。
+> あのタブのトグルは client grant を作るもので、`client_credentials` を使う
+> M2M アプリ向けです。third-party クライアントだと、ここを何も触らない状態で
+> `Client ... is not authorized to access resource server` になります。
 
 Client ID / Client Secret を `.env` に写します:
 
@@ -188,7 +191,7 @@ Claude アプリを介さず、Machine-to-Machine トークンで `/mcp` の Bea
 | TECHNICAL DETAILS の表示 | 原因 |
 |---|---|
 | `The userinfo audience is not allowed for third party clients` | 落とし穴1。DCR クライアントが使われている。`OAUTH_CLIENT_*` が未設定か、Auth0 側に反映されていない |
-| `Client ... is not authorized to access resource server ...` | 手順3の **APIs タブでの Authorize 漏れ**(または third-party クライアントで custom API を要求している) |
+| `Client ... is not authorized to access resource server ...` | third-party クライアントで custom API の audience を要求している。DCR 由来の client_id が使われていないか確認 |
 | `access_denied : Service not found: <URL>` | 落とし穴3。`resource` が Auth0 に転送されている |
 | `invalid_request : Unknown client: tpc_...` | その client_id が Auth0 に無い。DCR 時代の古い client_id を Claude が保持している。**Claude のコネクタを削除して登録し直す** |
 
