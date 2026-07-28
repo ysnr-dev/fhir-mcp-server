@@ -76,6 +76,11 @@ fhir-server(REST API)
 
 - **delete はツールとして提供しない**(AI からの破壊的操作は初期スコープ外。必要になれば別フラグで検討)
 - 書き込み時は `validate_fhir` での事前検証を推奨する説明文をツール description に含める
+- 前提: FHIR サーバー側で `FHIR_CLIENT_ID` のクライアントに `system/*.write` が付与されていること。
+  fhir-server では `.write` が create/update/patch/delete をまとめてカバーし、粒度分離は無い
+- Web版では認可の粒度がフラグ1つしかない(認証済みユーザー全員が書ける)。ユーザー単位に
+  絞る場合は、`src/http.ts` のセッション生成時に `extra.authInfo` の scope を見てツール登録を
+  出し分ける改修が必要 → 「今後の検討事項」
 
 ## 設定(環境変数)
 
@@ -83,7 +88,7 @@ fhir-server(REST API)
 |---|---|---|
 | `FHIR_BASE_URL` | `http://localhost:3000` | 接続先 FHIR サーバー |
 | `FHIR_CLIENT_ID` / `FHIR_CLIENT_SECRET` | なし | 未設定なら無認証モード |
-| `FHIR_MCP_ALLOW_WRITES` | `false` | 書き込みツールの登録可否 |
+| `FHIR_MCP_ALLOW_WRITES` | `false` | 書き込みツールの登録可否(FHIR 側の `system/*.write` 付与が前提) |
 | `FHIR_MCP_MAX_COUNT` | `50` | search の `_count` 上限 |
 
 ## fhir-server 側に依存する前提(連携契約)
@@ -97,7 +102,7 @@ fhir-mcp-server は fhir-server の以下の機能に依存する。接続先を
 
 ## テスト方針
 
-- **unit**: TokenManager(期限内キャッシュ / 先回り更新 / 401 リトライ / 無認証モード)、Bundle 整形、OperationOutcome 整形、`_count` クランプ
+- **unit**: TokenManager(期限内キャッシュ / 先回り更新 / 401 リトライ / 無認証モード)、Bundle 整形、OperationOutcome 整形、`_count` クランプ、書き込み系(条件付き作成ヘッダー / resourceType・id の整合検証 / JSON Patch の Content-Type と `If-Match` 正規化)
 - **integration**: docker compose で fhir-server を起動し、search → read → $everything → validate の一連 + 認証有効時の 401/403 経路
 - **手動確認**: Claude Code / Claude Desktop から「◯◯という患者の検査結果を要約して」等の自然言語操作
 
