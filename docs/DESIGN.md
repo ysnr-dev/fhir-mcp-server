@@ -52,7 +52,7 @@ fhir-server(REST API)
 | ツール | 入力 | 対応エンドポイント | 備考 |
 |---|---|---|---|
 | `get_capabilities` | なし | `GET /metadata` | 対応リソース・検索パラメータの一覧を要約して返す。AI が使い方を自己発見する起点 |
-| `search_fhir` | `resourceType`, `params`(key-value), `count?` | `GET /{type}?...` | チェーン検索・`_has`・`_include` 等はそのまま `params` で透過。既定 `_count=20`・上限あり。`_elements`/`_summary` を活用してトークン消費を抑えることを README に明記 |
+| `search_fhir` | `resourceType`, `params`(key-value), `count?` | `GET /{type}?...` | チェーン検索・`_has`・`_include` 等はそのまま `params` で透過。既定 `_count=20`・上限あり。`_elements`/`_summary` を活用してトークン消費を抑えることを docs/tools.md に明記 |
 | `read_fhir` | `resourceType`, `id` | `GET /{type}/{id}` | |
 | `patient_everything` | `patientId`, `types?`, `since?` | `GET /Patient/{id}/$everything` | 患者コンパートメント一括取得。`_type`/`_since` に対応 |
 | `get_history` | `resourceType?`, `id?`, `count?`, `since?` | `GET /{type}/{id}/_history` ほか | インスタンス/タイプ/システムレベルを引数で切替 |
